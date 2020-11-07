@@ -1,0 +1,491 @@
+#include <HX711_ADC.h>
+#include <LiquidCrystal.h>
+#include <SD.h>
+#define SD_ChipSelectPin 4
+#include <TMRpcm.h>
+#include <SPI.h>
+TMRpcm tmrpcm;
+File myFile;
+//LCD pin to Arduino
+const int pin_RS = 8; 
+const int pin_EN = 3; 
+const int pin_d4 = 2; 
+const int pin_d5 = 5; 
+const int pin_d6 = 6; 
+const int pin_d7 = 7; 
+const int pin_BL = 10; 
+LiquidCrystal lcd( pin_RS,  pin_EN,  pin_d4,  pin_d5,  pin_d6,  pin_d7);
+HX711_ADC LoadCell(A4, A5);
+float i_hold;
+int rep_count;
+float Const_Res;
+int repFlag;
+int repComplete;
+int StoreFlag;
+float i_max;
+unsigned long startTime = 0;
+unsigned long endTime = 0;
+unsigned long totalTime = 0;
+int RGcount;
+
+const int numOfScreens = 5;
+int currentScreen = 0;
+String screens[numOfScreens][2] = {{"Weight","kg"}, {"1RM", "kg"}, {"Const","reps"},{"Iso","secs"}, {"Plyo", "R/G"}};
+int parameters[numOfScreens];
+int selectFlag;
+
+void setup() {
+  LoadCell.begin(); // start connection to HX711
+  LoadCell.start(2000); // load cells gets 2000ms of time to stabilize
+  LoadCell.setCalFactor(35.0); // calibration factor for load cell
+  lcd.begin(16, 2);
+  i_hold = 0;
+  rep_count = 0;
+  repFlag = 0;
+  repComplete = 0;
+  StoreFlag = 0;
+  parameters[0] = 35;
+  parameters[1] = 50;
+  parameters[2] = 8;
+  parameters[3] = 5;
+  parameters[4] = 3;
+  Const_Res = 9;
+  RGcount = 0;
+  i_max = 0;
+  selectFlag = 0;
+  tmrpcm.speakerPin = 9;
+  tmrpcm.setVolume(5);
+  Serial.begin(9600);
+  if (!SD.begin(SD_ChipSelectPin)) {
+    Serial.println("SD fail");
+    return;
+    }
+}
+void loop() {
+ int x;
+ x = analogRead (0);
+ if (x < 50) {
+  if (currentScreen == numOfScreens-1) {
+    currentScreen = 0;
+    }else{
+      currentScreen++;
+      }  
+ }
+ else if (x < 195) {
+  parameterChange(0);
+ }
+ else if (x < 380) {
+  parameterChange(1);
+ }
+ else if (x < 555) {
+  if (currentScreen == 0) {
+    currentScreen = numOfScreens-1;
+    }else{
+      currentScreen--;
+      }
+ }
+ else if (x < 790) {
+  selectFlag = 1;
+  delay(5000); 
+  }
+
+
+  
+  if (currentScreen == 0) {
+    Test_RM();
+  }
+  else if (currentScreen == 1) {
+    One_RM();
+  }
+  else if (currentScreen == 2) {
+    printScreen();
+    Const();
+  }
+  else if (currentScreen == 3) {
+    printScreen();
+    Iso();
+  }
+  else if (currentScreen == 4) {
+    printScreen();
+    Plyo();
+  }
+   
+   
+   
+delay(200);
+}
+
+void parameterChange(int key) {
+if((key == 0)&&(parameters[currentScreen] == 10)) {
+  parameters[currentScreen] = 1;
+}else if((key == 0)&&(parameters[currentScreen] != 10)){
+    parameters[currentScreen]++;
+  }else if((key == 1)&&(parameters[currentScreen] == 1)) {
+    parameters[currentScreen] = 10;
+  }else if((key == 1)&&(parameters[currentScreen] != 1)){
+    parameters[currentScreen]--;
+    }
+    }
+ 
+void printScreen() {
+lcd.clear();
+lcd.print(screens[currentScreen][0]);
+lcd.setCursor(0,1);
+lcd.print(parameters[currentScreen]);
+lcd.print(" ");
+lcd.print(screens[currentScreen][1]);
+}
+
+void Test_RM() {
+  LoadCell.update(); // retrieves data from the load cell
+  float t = LoadCell.getData(); // get output value
+  lcd.clear();
+  lcd.setCursor(0, 0); // set cursor to first row
+  lcd.print("Weight[kg]:     "); // print out to LCD
+  lcd.setCursor(0, 1); // set cursor to second row
+  lcd.print(t/1000.0); // print out the retrieved value to the second row
+  lcd.setCursor(5,1);
+  lcd.print("          ");
+}
+
+void One_RM() {
+  LoadCell.update(); // retrieves data from the load cell
+  float i = LoadCell.getData(); // get output value
+  delay(50);
+  LoadCell.update(); // retrieves data from the load cell
+  float curr_i = LoadCell.getData(); // get output value
+  if ((curr_i >= i)&&(curr_i >= i_hold)){
+    i_max = curr_i;
+    i_hold = i_max;
+  }
+  else{
+    i_max = i_hold;
+  }
+
+  if ((selectFlag == 1)&&(StoreFlag == 0)){
+    myFile = SD.open("1RMdata.txt", FILE_WRITE);
+    // if the file opened okay, write to it:
+    if (myFile) {
+    myFile.println(i_max/1000.0);
+    // close the file:
+    myFile.close();
+    StoreFlag = 1;
+    } else {
+    // if the file didn't open, print an error:
+    Serial.println("error opening 1RMdata.txt");
+    }
+    }
+    selectFlag = 0;
+
+  lcd.clear();
+  lcd.setCursor(0, 0); // set cursor to first row
+  lcd.print("1RM[kg]:        "); // print out to LCD
+  lcd.setCursor(0, 1); // set cursor to second row
+  lcd.print(i_max/1000.0); // print out the retrieved value to the second row
+  lcd.setCursor(5, 1);
+  lcd.print("          ");
+}
+
+void Const() {
+  float WorkingWeight;
+  switch (parameters[2]){
+    case 1:
+    WorkingWeight = 0.95*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.95*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 2:
+    WorkingWeight = 0.9*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.9*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 3:
+    WorkingWeight = 0.85*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.85*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 4:
+    WorkingWeight = 0.8*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.8*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 5:
+    WorkingWeight = 0.75*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.75*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 6:
+    WorkingWeight = 0.7*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.7*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 7:
+    WorkingWeight = 0.65*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.65*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 8:
+    WorkingWeight = 0.6*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.6*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 9:
+    WorkingWeight = 0.55*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.55*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 10:
+    WorkingWeight = 0.5*(i_max/1000.0);
+    lcd.setCursor(10, 0);
+    lcd.print(0.5*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    default:
+      break;
+  }
+  if (selectFlag == 1){
+  while (rep_count < parameters[2]){
+  //float r_max;
+  //LoadCell.update(); // retrieves data from the load cell
+  //float r = LoadCell.getData(); // get output value
+  //delay(50);
+  LoadCell.update(); // retrieves data from the load cell
+  float curr_r = LoadCell.getData(); // get output value
+  delay(50);
+  /*if ((curr_r < r)&&(curr_r <= 0.05*Const_Res*1000)&&(curr_r >= 0.0*Const_Res*1000)){
+    repComplete = 0;
+  }*/
+  
+  /*if ((curr_r > r)&&(curr_r >= 0.99*Const_Res*1000)&&(curr_r <= 1.0*Const_Res*1000)&&(repComplete == 0)){
+    rep_count = rep_count + 1;
+    repFlag = 1;
+  }*/
+
+  if ((curr_r >= 0.9*(WorkingWeight)*1000)&&(repComplete == 0)){
+    rep_count = rep_count + 1;
+    repFlag = 1;  
+  }
+
+  if (curr_r <= 0.7*(WorkingWeight)*1000){
+    repComplete = 0;
+  }
+
+  //test
+  lcd.setCursor(10, 1); // set cursor to second row
+  lcd.print(curr_r/1000.0); // print out the retrieved value to the second row
+  //test
+
+  
+  if ((rep_count == 1)&&(repFlag == 1)){
+    tmrpcm.play("1.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 2)&&(repFlag == 1)){
+    tmrpcm.play("2.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 3)&&(repFlag == 1)){
+    tmrpcm.play("3.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 4)&&(repFlag == 1)){
+    tmrpcm.play("4.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 5)&&(repFlag == 1)){
+    tmrpcm.play("5.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 6)&&(repFlag == 1)){
+    tmrpcm.play("6.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 7)&&(repFlag == 1)){
+    tmrpcm.play("7.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 8)&&(repFlag == 1)){
+    tmrpcm.play("8.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 9)&&(repFlag == 1)){
+    tmrpcm.play("9.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  else if ((rep_count == 10)&&(repFlag == 1)){
+    tmrpcm.play("10.wav");
+    repFlag = 0;
+    repComplete = 1;
+  }
+  } 
+}
+selectFlag = 0;
+}
+
+void Iso() {
+  switch (parameters[3]){
+    case 1:
+    lcd.setCursor(10, 0);
+    lcd.print(0.98*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 2:
+    lcd.setCursor(10, 0);
+    lcd.print(0.96*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 3:
+    lcd.setCursor(10, 0);
+    lcd.print(0.94*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 4:
+    lcd.setCursor(10, 0);
+    lcd.print(0.92*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 5:
+    lcd.setCursor(10, 0);
+    lcd.print(0.9*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 6:
+    lcd.setCursor(10, 0);
+    lcd.print(0.88*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 7:
+    lcd.setCursor(10, 0);
+    lcd.print(0.86*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 8:
+    lcd.setCursor(10, 0);
+    lcd.print(0.84*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 9:
+    lcd.setCursor(10, 0);
+    lcd.print(0.82*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    case 10:
+    lcd.setCursor(10, 0);
+    lcd.print(0.8*(i_max/1000.0));
+    lcd.setCursor(14, 0);
+    lcd.print("kg");
+      break;
+    default:
+      break;
+  }
+  
+  if ((selectFlag == 1)&&(parameters[3] == 1)){
+    tmrpcm.play("Iso1.wav");
+    selectFlag = 0; 
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 2)){
+    tmrpcm.play("Iso2.wav");
+    selectFlag = 0;
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 3)){
+    tmrpcm.play("Iso3.wav");
+    selectFlag = 0;
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 4)){
+    tmrpcm.play("Iso4.wav");
+    selectFlag = 0;
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 5)){
+    tmrpcm.play("Iso5.wav");
+    selectFlag = 0;
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 6)){
+    tmrpcm.play("Iso6.wav");
+    selectFlag = 0;
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 7)){
+    tmrpcm.play("Iso7.wav");
+    selectFlag = 0;
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 8)){
+    tmrpcm.play("Iso8.wav");
+    selectFlag = 0;
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 9)){
+    tmrpcm.play("Iso9.wav");
+    selectFlag = 0;
+  }
+  else if ((selectFlag == 1)&&(parameters[3] == 10)){
+    tmrpcm.play("Iso10.wav");
+    selectFlag = 0;
+  }
+}
+
+void Plyo(){
+  if (selectFlag == 1){
+    int reaction[parameters[4]];
+    while (RGcount < parameters[4]){
+    //Serial.print(RGcount);
+    int delayTime = random(5000,7000);
+    delay(delayTime);
+    LoadCell.update(); // retrieves data from the load cell
+    float curr_r = LoadCell.getData(); // get output value
+    tmrpcm.play("start.wav"); //change to ReadyGo later
+    startTime = millis();
+    while (curr_r <= 0.5*Const_Res*1000){
+      LoadCell.update(); // retrieves data from the load cell
+      curr_r = LoadCell.getData(); // get output value
+    }
+    endTime = millis();
+    totalTime = endTime - startTime;
+    reaction[RGcount] = totalTime;
+    RGcount++;
+    //Serial.print(RGcount);
+    }
+//    int minReaction = reaction[0];
+//    for (int i=1; i<parameters[4]; i++){
+//      if (reaction[i]<minReaction){
+//        minReaction = reaction[i];
+//      }
+//    }
+    lcd.setCursor(10,1);
+    lcd.print(totalTime);
+  }
+}
